@@ -164,6 +164,16 @@
         <div id="probResult" class="prob-result"></div>
       </section>
 
+      <section id="coverageCard" class="card coverage-card" hidden>
+        <div class="card-head">
+          <h2>选项覆盖路线</h2>
+          <button id="btnRunCoverage" class="btn btn-small btn-primary">生成覆盖路线</button>
+        </div>
+        <div class="prob-hint">展开「场景 + 变量状态」图，为每条实际可走的选项保留可复现路径，再用确定性贪心集合覆盖压缩路线集。不可达、恒假、悬空、入口受阻的选项不计入覆盖分母。</div>
+        <div id="covStale" class="diff-stale" hidden>⚠ 剧情已修改，以下覆盖结果可能过期，请重新「生成覆盖路线」</div>
+        <div id="covResult" class="cov-result"></div>
+      </section>
+
       <section id="detailPanel" class="card detail-card" hidden>
         <div class="card-head">
           <h2 id="detailTitle">问题详情</h2>

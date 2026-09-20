@@ -1,6 +1,6 @@
 # 分支剧情一致性审校台（Branching Story Auditor）
 
-一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**：精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量。
+一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**（精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量）与 **选项覆盖路线**（为每条实际可走的选项保留可复现路径，用确定性贪心集合覆盖压缩成最少路线集，汇总覆盖率）。
 
 ## 能发现什么问题
 
@@ -185,6 +185,22 @@ npm start
 
 响应要点：`endings`（`sceneId` / `title` / `kind`：`ending` 或 `deadend` / `probability` / 吸收态数 `states`，按概率降序）、`totalEndingProbability`、`loopProbability`、`loops`（每个陷阱循环的 `probability`、涉及的 `scenes`、包含的具体状态数 `states`）、`counts`（具体状态数、转移数等）、`solver`（`exact` / `iterative` / `trivial`）、`conditionErrors`（语法错误按恒真处理的计数）。任意一次完整推演都有 `totalEndingProbability + loopProbability = 1`。
 
+## 选项覆盖路线
+
+编辑页右侧的「选项覆盖路线」面板回答：**“要让 QA / 玩家实际走通游戏里的每一条可用选项，最少需要打几条路线？每条路线具体怎么走？”**
+
+1. 点击「生成覆盖路线」，后端对 **编辑中的草稿**（不落盘）展开「场景 + 变量状态」图（与分析器相同的 BFS、按 `场景 + 完整变量位图` 去重与约 100 万状态上限）；
+2. 每条 **实际可走** 的选项（所在场景可达；存在某个到达状态使显示条件成立；目标场景存在；应用选项赋值与目标进入赋值后目标前置条件成立）都保留一条从起点出发、以该选项为最后一步的 **最短可复现路径**（证据路线）；
+3. 每条路线实际覆盖“路径上经过的全部可走选项”，后端据此执行 **确定性贪心集合覆盖**：每轮选择覆盖尚未覆盖选项最多的路线，平局依次按路线更短、场景顺序更早、选项下标更小决出——**同一份草稿永远生成同一份路线集**，不会每次随机；
+4. 每条路线列出 **选项 UID、场景与每一步的变量状态**（场景节点带到达时状态，选项边带选择后状态，最后一步标注「证据选项」），路线头部显示“新覆盖 N / 共 M 个选项”，并在路径上方用 chips 列出该路线覆盖的全部选项（实心 chip = 该路线首次覆盖）；
+5. **覆盖率汇总**：覆盖可走选项数 / 可走选项分母、覆盖率百分比、候选路线数 → 选用路线数、合计选项步数、枚举具体状态数；
+6. **覆盖分母只算实际可走的选项**：不可达场景中的选项（`unreachableScene`）、条件恒假（`neverTrueOption`）、悬空跳转（`orphanOption`）、入口前置受阻（`blockedEntry`）一律 **不计入分母**，而在结果底部“不计入覆盖分母的选项”中按原因单独列出；
+7. **循环图按具体状态去重**：同一 `(场景, 变量状态)` 只展开一次，环路在具体状态上闭合，所以“先绕循环改变变量、再回来走另一个选项”这类路线可以生成，且证据路径中不会重复同一具体状态，保证可复现、必然终止；
+8. **状态上限截断时标记结果不完整**：`complete=false` / `truncated=true`，覆盖率只按已确认可走的选项计算（真实覆盖率的 **下界**），因截断尚未被任何已扩展状态观测到的选项归入 `unknownOptions`（同样不计入分母）并提示重新生成，绝不以不完整结果冒充全覆盖；起点前置不成立时单独提示 `startBlocked`、覆盖率为 0；
+9. 剧情被继续编辑后，旧结果标记为 **可能过期**，重新「生成覆盖路线」即可。
+
+响应要点：`complete`（结果是否完整；截断或起点受阻时为 `false`）、`truncated`、`startBlocked`、`coverage`（`covered` / `total`（只含实际可走选项）/ `remaining` / `rate`）、`routes`（每条含 `route` 序号、`witnessFor`（证据选项的 UID / 场景 / 下标 / 文案 / 目标）、`depth`、`steps`（scene / option 交替的每步状态，选项边带 `optionUid` / `optionKey` / `stateAfter`，末边为证据选项）、`coveredOptions`（路径上覆盖的全部可走选项，每项带 `stepIndex`——在本路线 `steps` 中首次经过它的位置，此前缀即可复现到该选项）、`newlyCoveredCount`）、`walkableOptions`（全部可走选项及其最短证据步长 `witnessDepth`、所属路线 `route` 与 `routeStepIndex`）、`excludedOptions`（带 `reason` 的不计分母选项）、`unknownOptions`（截断未观测）、`counts`、`knownVars`、`conditionErrors`。
+
 ## HTTP API
 
 | 方法 | 路径 | 说明 |
@@ -200,6 +216,8 @@ npm start
 | `POST` | `/api/stories/:id/pathquery` | 对已保存剧情做目标路径查询，请求体即 `query` |
 | `POST` | `/api/probability` | 结局概率推演：对请求体中的草稿剧情直接推演（不落盘），请求体即剧情或 `{ story }`；非法权重返回 400 |
 | `GET` | `/api/stories/:id/probability` | 对已保存剧情做结局概率推演 |
+| `POST` | `/api/coverage` | 选项覆盖路线：对请求体中的草稿剧情直接展开（不落盘），请求体即剧情或 `{ story }`；缺少有效起点返回 400 |
+| `GET` | `/api/stories/:id/coverage` | 对已保存剧情生成选项覆盖路线 |
 | `POST` | `/api/stories/:id/baseline` | 把请求体中的剧情分析结果保存为基线（同时落盘剧情），返回 `{ story, baseline, analysis }` |
 | `POST` | `/api/stories/:id/baseline/compare` | 基线对比；请求体可省略（对比已保存剧情）或传入编辑中的草稿，返回 `{ summary, items }` |
 | `DELETE` | `/api/stories/:id/baseline` | 删除基线（剧情内容不变） |
@@ -224,12 +242,13 @@ npm start
 
 ```
 .
-├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演接口）
+├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演、选项覆盖路线接口）
 ├── src/
 │   ├── expression.js      # 布尔表达式递归下降解析器 / 求值 / 失败解释
 │   ├── analyzer.js        # 「场景+状态」BFS 传播去重分析引擎（附带问题指纹）
 │   ├── pathquery.js       # 目标路径查询：必经序号+场景+状态 BFS 求最短链 / 差异最少状态
 │   ├── probability.js     # 结局概率推演：状态图展开、SCC 分解、吸收概率精确求解
+│   ├── coverage.js        # 选项覆盖路线：可走选项证据路径 + 确定性贪心集合覆盖
 │   ├── weight.js          # 选项正整数权重的统一校验（保存 / 导入 / 推演共用）
 │   ├── fingerprint.js     # 不依赖数组顺序的问题稳定指纹
 │   ├── baseline.js        # 基线快照构建与新增/已修复/仍存在/详情变化对比
@@ -246,6 +265,7 @@ npm start
 │   ├── baseline.js        # 指纹 / 基线对比 / 持久化自检（node test/baseline.js）
 │   ├── pathquery.js       # 目标路径查询与 API 自检（node test/pathquery.js）
 │   ├── probability.js     # 结局概率推演核心算法与 API 自检（node test/probability.js）
+│   ├── coverage.js        # 选项覆盖路线：贪心集合覆盖 / 循环去重 / 截断与排除分母 / API 自检（node test/coverage.js）
 │   └── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
 ├── Dockerfile
 └── docker-compose.yml
@@ -254,7 +274,7 @@ npm start
 自检：
 
 ```bash
-npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js 与 healthcheck.js
+npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js、coverage.js 与 healthcheck.js
 ```
 
 ## 技术栈

@@ -205,6 +205,7 @@ code {
 .opt-weight-field input { text-align: right; }
 
 /* ---------- 右栏分析 ---------- */
+.pane-right { overflow-y: auto; }
 .analysis-card { max-height: 46%; display: flex; flex-direction: column; }
 .analysis-card > .issue-list { overflow: auto; }
 
@@ -415,6 +416,57 @@ code {
 .prob-bar-fill.fill-ok { background: var(--ok); }
 .prob-bar-fill.fill-warn { background: var(--warning); }
 .prob-bar-fill.fill-err { background: var(--danger); }
+
+/* ---------- 选项覆盖路线 ---------- */
+.coverage-card { max-height: 44%; display: flex; flex-direction: column; }
+.coverage-card .cov-result { overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.cov-summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.cov-summary .stat {
+  flex-direction: column; align-items: flex-start; gap: 1px;
+  background: #fff; border: 1px solid var(--border); flex: 1 1 104px;
+  padding: 5px 9px; font-size: 10.5px;
+}
+.cov-summary .stat b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.cov-bar { height: 6px; border-radius: 3px; background: #eef1f6; overflow: hidden; }
+.cov-bar-fill { height: 100%; background: var(--ok); }
+.cov-bar-fill.incomplete { background: var(--warning); }
+.cov-route {
+  border: 1px solid var(--border); border-radius: 8px; background: #fff;
+  padding: 0; overflow: hidden;
+}
+.cov-route-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border: none; background: #f6f8fc; cursor: pointer; font-size: 12.5px; text-align: left;
+}
+.cov-route-head:hover { background: #eef2f9; }
+.cov-route-no {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--primary); color: #fff; font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.cov-route-title { flex: 1; min-width: 0; }
+.cov-route-title .cr-main { font-weight: 600; }
+.cov-route-title .cr-sub { display: block; font-size: 11px; color: var(--muted); }
+.cov-route-pills { display: flex; gap: 4px; flex-shrink: 0; }
+.cov-pill { font-size: 10.5px; border-radius: 10px; padding: 1px 8px; background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+.cov-pill.new { background: var(--primary); color: #fff; }
+.cov-route-body { padding: 6px 10px 8px; display: flex; flex-direction: column; }
+.cov-route-covers { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.cov-cover-chip {
+  font-size: 10.5px; background: var(--ok-bg); color: var(--ok);
+  border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, Menlo, monospace;
+}
+.cov-cover-chip.is-new { background: var(--primary); color: #fff; }
+.cov-cover-chip.is-witness { outline: 1px solid var(--primary); }
+.cov-excluded {
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  background: #fff; display: flex; flex-direction: column; gap: 5px;
+}
+.cov-excluded-title { font-size: 12px; font-weight: 700; color: var(--muted); }
+.cov-excl-row { display: flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
+.cov-excl-row code { font-size: 11px; }
+.path-edge.cov-witness { border-left-color: var(--primary); font-weight: 600; }
+.cov-uid { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--muted); }
 
 /* ---------- Toast ---------- */
 .toast {

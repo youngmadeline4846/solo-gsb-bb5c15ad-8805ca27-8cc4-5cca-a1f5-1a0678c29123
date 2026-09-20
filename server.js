@@ -6,6 +6,7 @@ const storage = require('./src/storage');
 const { analyze } = require('./src/analyzer');
 const { queryPath } = require('./src/pathquery');
 const { inferEndings } = require('./src/probability');
+const { coverOptions } = require('./src/coverage');
 const { buildBaseline, compareWithBaseline } = require('./src/baseline');
 
 const app = express();
@@ -97,6 +98,22 @@ app.get('/api/stories/:id/probability', wrap((req, res) => {
   const story = storage.getStory(req.params.id);
   if (!story) return res.status(404).json({ error: '剧情不存在' });
   res.json(inferEndings(story));
+}));
+
+// ---- 选项覆盖路线：对请求体中的草稿剧情直接展开（不落盘），供编辑页面板实时使用 ----
+// 请求体即剧情（或 { story: <剧情> }）。展开「场景 + 变量状态」图，为每条实际可走
+// 选项保留最短可复现路径，再用确定性贪心集合覆盖压缩路线集并汇总覆盖率。
+app.post('/api/coverage', wrap((req, res) => {
+  const body = req.body || {};
+  const story = body.story !== undefined ? body.story : body;
+  res.json(coverOptions(story));
+}));
+
+// ---- 对已保存的剧情生成选项覆盖路线 ----
+app.get('/api/stories/:id/coverage', wrap((req, res) => {
+  const story = storage.getStory(req.params.id);
+  if (!story) return res.status(404).json({ error: '剧情不存在' });
+  res.json(coverOptions(story));
 }));
 
 // ---- 分析基线：把当前（通常是编辑中的）分析结果保存为基线，随剧情 JSON 持久化 ----

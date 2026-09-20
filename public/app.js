@@ -20,6 +20,8 @@ const state = {
   _pqSig: null,           // 查询面板场景/变量签名（避免每次编辑都重建下拉框）
   probResult: null,       // 最近一次结局概率推演结果
   probStale: false,       // 推演之后剧情又被编辑过
+  covResult: null,        // 最近一次选项覆盖路线结果
+  covStale: false,        // 覆盖路线生成之后剧情又被编辑过
   dirty: false,
   saving: false,
 };
@@ -79,6 +81,8 @@ async function openStory(id) {
   state._pqSig = null;
   state.probResult = null;
   state.probStale = false;
+  state.covResult = null;
+  state.covStale = false;
   $('storySelect').value = id;
   renderAll();
   await runAnalysis(false);
@@ -142,6 +146,8 @@ async function deleteStory() {
   state._pqSig = null;
   state.probResult = null;
   state.probStale = false;
+  state.covResult = null;
+  state.covStale = false;
   const next = await loadList();
   if (next) await openStory(next);
   else { renderAll(); toast('已删除'); }
@@ -187,6 +193,7 @@ function renderAll() {
   renderAnalysis();
   renderPathQueryPanel();
   renderProbabilityPanel();
+  renderCoveragePanel();
   renderDetail(null);
 }
 
@@ -504,11 +511,13 @@ function markDirty(rerender) {
   if (state.diff) state.diffStale = true;
   markPathQueryStale();
   markProbabilityStale();
+  markCoverageStale();
   renderSaveStatus();
   if (rerender) rerender();
   else renderAnalysis();
   renderPathQueryPanel(); // 内部有签名缓存，场景/变量未变时仅刷新过期提示与结果
   renderProbabilityPanel(); // 仅刷新过期提示与已展示的结果，不重新推演
+  renderCoveragePanel(); // 仅刷新过期提示与已展示的结果，不重新生成
   clearTimeout(reanalyzeTimer);
   reanalyzeTimer = setTimeout(() => runAnalysis(true), 500);
 }
@@ -1138,6 +1147,209 @@ function renderProbabilityResult() {
 }
 
 
+/* ============================================================
+ * 选项覆盖路线
+ * ============================================================ */
+const COV_EXCL_META = {
+  unreachableScene: { label: '场景不可达', cls: 'badge-muted' },
+  neverTrueOption: { label: '条件恒假', cls: 'badge-warn' },
+  orphanOption: { label: '悬空跳转', cls: 'badge-err' },
+  blockedEntry: { label: '入口受阻', cls: 'badge-err' },
+  unknown: { label: '截断未观测', cls: 'badge-warn' },
+};
+
+function covOptionName(o) {
+  return `${o.sceneId}#${o.optionIndex + 1}「${o.text || '（无文案）'}」`;
+}
+
+function markCoverageStale() {
+  if (!state.covResult) return;
+  state.covStale = true;
+  const el = $('covStale');
+  if (el) el.hidden = false;
+}
+
+async function runCoverage() {
+  if (!state.story) return;
+  try {
+    // 对编辑中的草稿直接展开（不落盘）
+    state.covResult = await api('POST', '/api/coverage', state.story);
+    state.covStale = false;
+    renderCoveragePanel();
+  } catch (e) {
+    toast(`生成覆盖路线失败：${e.message}`);
+  }
+}
+
+function renderCoveragePanel() {
+  const card = $('coverageCard');
+  if (!state.story) { card.hidden = true; return; }
+  card.hidden = false;
+  $('covStale').hidden = !state.covStale;
+  renderCoverageResult();
+}
+
+/** 单条路线的逐步视图：场景 / 选项交替；作为证据的最后一步高亮，标注覆盖编号 */
+function buildCovRouteView(route, knownVars) {
+  const body = document.createElement('div');
+  body.className = 'cov-route-body';
+
+  const covers = document.createElement('div');
+  covers.className = 'cov-route-covers';
+  for (const o of route.coveredOptions) {
+    const chip = document.createElement('span');
+    chip.className = 'cov-cover-chip';
+    if (o.route === route.route) chip.classList.add('is-new');
+    if (o.uid === route.witnessFor.uid && o.sceneId === route.witnessFor.sceneId) {
+      chip.classList.add('is-witness');
+    }
+    chip.textContent = `${o.sceneId}#${o.optionIndex + 1}`;
+    chip.title = `${covOptionName(o)}（路线 #${o.route} 首次覆盖）`;
+    covers.appendChild(chip);
+  }
+  body.appendChild(covers);
+
+  const path = document.createElement('div');
+  path.className = 'path-view';
+  (route.steps || []).forEach((node, i, arr) => {
+    if (node.kind === 'scene') {
+      const div = document.createElement('div');
+      div.className = 'path-node scene' + (i === 0 ? ' start' : '');
+      const badge = i === 0 ? '<span class="badge badge-ok">起点</span>' : '';
+      div.innerHTML = `<span class="pn-title"></span><span class="pn-id"></span>${badge}`;
+      div.querySelector('.pn-title').textContent = node.title || node.sceneId;
+      div.querySelector('.pn-id').textContent = node.sceneId;
+      div.insertAdjacentHTML('beforeend', stateChips(node.state, knownVars || []));
+      path.appendChild(div);
+    } else {
+      const isWitness = i === arr.length - 1;
+      const div = document.createElement('div');
+      div.className = 'path-edge' + (isWitness ? ' cov-witness' : '');
+      const uidTxt = node.optionUid ? ` <span class="cov-uid">${node.optionUid}</span>` : '';
+      div.innerHTML = `${isWitness ? '<span class="badge badge-req">证据选项</span> ' : ''}`
+        + `选项 ${node.optionIndex + 1}「${node.optionText || ''}」 → ${node.target}${uidTxt}`;
+      if (node.stateAfter) div.insertAdjacentHTML('beforeend', stateChips(node.stateAfter, knownVars || []));
+      path.appendChild(div);
+    }
+  });
+  body.appendChild(path);
+  return body;
+}
+
+function renderCoverageResult() {
+  const box = $('covResult');
+  box.innerHTML = '';
+  const r = state.covResult;
+  if (!r || !state.story) return;
+
+  // ---- 顶部结论横幅 ----
+  const banner = document.createElement('div');
+  if (r.startBlocked) {
+    banner.className = 'pq-banner pq-err';
+  } else if (!r.complete) {
+    banner.className = 'pq-banner pq-warn';
+  } else {
+    banner.className = 'pq-banner pq-ok';
+  }
+  banner.textContent = (r.complete ? '✓ ' : '⚠ ') + r.message;
+  box.appendChild(banner);
+
+  if (r.conditionErrors && r.conditionErrors.length) {
+    const note = document.createElement('div');
+    note.className = 'pq-note';
+    note.textContent = `剧情中存在 ${r.conditionErrors.length} 处条件语法错误，本次展开按恒真处理（详见一致性分析）。`;
+    box.appendChild(note);
+  }
+
+  // ---- 覆盖率汇总 ----
+  const c = r.counts;
+  const pct = r.coverage.total ? `${(r.coverage.rate * 100).toFixed(1)}%` : '—';
+  const summary = document.createElement('div');
+  summary.className = 'cov-summary';
+  summary.innerHTML = `
+    <div class="stat"><span>覆盖可走选项</span><b>${r.coverage.covered} / ${r.coverage.total}</b></div>
+    <div class="stat"><span>覆盖率</span><b>${pct}</b></div>
+    <div class="stat"><span>路线数（候选 → 选用）</span><b>${c.candidateRoutes} → ${c.routes}</b></div>
+    <div class="stat"><span>合计选项步数</span><b>${c.totalSteps}</b></div>
+    <div class="stat"><span>具体状态</span><b>${c.concreteStates}</b></div>
+    <div class="stat"><span>不计入分母</span><b>${c.excludedOptions}${c.unknownOptions ? `（+${c.unknownOptions} 未观测）` : ''}</b></div>
+  `;
+  box.appendChild(summary);
+
+  if (r.coverage.total > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'cov-bar';
+    bar.innerHTML = `<div class="cov-bar-fill ${r.complete ? '' : 'incomplete'}" style="width:${(r.coverage.rate * 100).toFixed(2)}%"></div>`;
+    box.appendChild(bar);
+  }
+
+  // ---- 路线列表（<details> 折叠，第一条默认展开） ----
+  if (!r.routes.length) {
+    const none = document.createElement('div');
+    none.className = 'pq-note';
+    none.textContent = r.startBlocked
+      ? '起点场景的前置条件在初始状态下不成立，剧情无法开始。'
+      : '不存在任何实际可走的选项，因此没有可生成的覆盖路线。';
+    box.appendChild(none);
+  }
+  r.routes.forEach((route) => {
+    const det = document.createElement('details');
+    det.className = 'cov-route';
+    if (route.route === 1) det.open = true;
+
+    const head = document.createElement('summary');
+    head.className = 'cov-route-head';
+    head.innerHTML = `
+      <span class="cov-route-no">${route.route}</span>
+      <span class="cov-route-title">
+        <span class="cr-main"></span>
+        <span class="cr-sub"></span>
+      </span>
+      <span class="cov-route-pills">
+        <span class="cov-pill new">新覆盖 ${route.newlyCoveredCount}</span>
+        <span class="cov-pill">共 ${route.coveredOptions.length}</span>
+      </span>
+    `;
+    head.querySelector('.cr-main').textContent =
+      `${route.depth} 步 · 证据选项 ${covOptionName(route.witnessFor)}`;
+    head.querySelector('.cr-sub').textContent =
+      `UID：${route.witnessFor.hasStableUid ? route.witnessFor.uid : '（未分配，保存后自动生成）'}`;
+    det.appendChild(head);
+    det.appendChild(buildCovRouteView(route, r.knownVars));
+    box.appendChild(det);
+  });
+
+  // ---- 不计入覆盖分母的选项 ----
+  const renderExclGroup = (items, title) => {
+    if (!items.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'cov-excluded';
+    const t = document.createElement('div');
+    t.className = 'cov-excluded-title';
+    t.textContent = title;
+    wrap.appendChild(t);
+    for (const o of items) {
+      const meta = COV_EXCL_META[o.reason] || { label: o.reason, cls: 'badge-muted' };
+      const row = document.createElement('div');
+      row.className = 'cov-excl-row';
+      row.innerHTML = `<span class="badge ${meta.cls}">${meta.label}</span><code></code>`;
+      row.querySelector('code').textContent = covOptionName(o);
+      if (o.hasStableUid) {
+        const uid = document.createElement('span');
+        uid.className = 'cov-uid';
+        uid.textContent = o.uid;
+        row.appendChild(uid);
+      }
+      wrap.appendChild(row);
+    }
+    box.appendChild(wrap);
+  };
+  renderExclGroup(r.excludedOptions,
+    `不计入覆盖分母的选项（${r.excludedOptions.length}）：不可达场景 / 恒假 / 悬空 / 入口受阻`);
+  renderExclGroup(r.unknownOptions,
+    `因状态上限截断未能观测的选项（${r.unknownOptions.length}）：不计入分母，请减少变量后重新生成`);
+}
+
 function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -1537,6 +1749,7 @@ function bindGlobalEvents() {
   });
   $('btnAnalyze').addEventListener('click', () => runAnalysis(state.dirty));
   $('btnRunProb').addEventListener('click', runProbability);
+  $('btnRunCoverage').addEventListener('click', runCoverage);
   $('btnCloseDetail').addEventListener('click', () => $('detailPanel').hidden = true);
   $('btnSaveBaseline').addEventListener('click', saveBaseline);
   $('btnRunCompare').addEventListener('click', runCompare);
