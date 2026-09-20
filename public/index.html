@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>分支剧情一致性审校台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🗺️</span>
+      <div>
+        <h1>分支剧情一致性审校台</h1>
+        <small>布尔前置条件 · 状态赋值 · 选项跳转 · 状态空间传播分析</small>
+      </div>
+    </div>
+    <div class="top-actions">
+      <select id="storySelect" title="切换剧情"></select>
+      <button id="btnNew" class="btn">＋ 新建剧情</button>
+      <button id="btnImport" class="btn">⬆ 导入 JSON</button>
+      <input type="file" id="fileInput" accept="application/json,.json" hidden />
+      <button id="btnExport" class="btn">⬇ 导出 JSON</button>
+      <button id="btnDelete" class="btn btn-danger" title="删除当前剧情">删除</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左栏：剧情结构 -->
+    <aside class="pane pane-left">
+      <section class="card">
+        <h2>剧情设置</h2>
+        <label class="field">
+          <span>标题</span>
+          <input type="text" id="storyTitle" placeholder="剧情标题" />
+        </label>
+        <label class="field">
+          <span>描述</span>
+          <textarea id="storyDesc" rows="2" placeholder="剧情简介（可留空）"></textarea>
+        </label>
+        <label class="field">
+          <span>起点场景</span>
+          <select id="startScene"></select>
+        </label>
+        <div class="field">
+          <span>布尔变量</span>
+          <div id="varList" class="var-list"></div>
+          <div class="inline-add">
+            <input type="text" id="newVarName" placeholder="新变量名，如 hasKey" />
+            <button id="btnAddVar" class="btn btn-small">添加</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card grow">
+        <div class="card-head">
+          <h2>场景列表</h2>
+          <button id="btnAddScene" class="btn btn-small">＋ 新场景</button>
+        </div>
+        <ul id="sceneList" class="scene-list"></ul>
+      </section>
+
+      <div class="save-bar">
+        <span id="saveStatus" class="save-status"></span>
+        <button id="btnSave" class="btn btn-primary">保存剧情</button>
+      </div>
+    </aside>
+
+    <!-- 中栏：场景编辑 -->
+    <section class="pane pane-center">
+      <div id="editorEmpty" class="empty-hint">
+        <p>← 从左侧选择一个场景开始编辑，或点击「＋ 新场景」</p>
+        <p class="muted">支持的条件语法：<code>a &amp;&amp; b</code>、<code>a || b</code>、<code>!a</code>、<code>(a || b) &amp;&amp; !c</code>；留空表示恒真。</p>
+      </div>
+      <div id="editor" class="editor" hidden>
+        <div class="editor-head">
+          <input type="text" id="sceneId" class="scene-id-input" spellcheck="false" />
+          <input type="text" id="sceneTitle" class="scene-title-input" placeholder="场景标题" />
+        </div>
+        <textarea id="sceneText" rows="4" placeholder="场景正文……"></textarea>
+
+        <div class="grid-2">
+          <label class="field">
+            <span>进入前置条件</span>
+            <input type="text" id="scenePre" placeholder="如 hasKey || witchHelp；留空恒真" spellcheck="false" />
+          </label>
+          <div class="field">
+            <span>进入时状态赋值</span>
+            <div id="sceneAssigns" class="assign-list"></div>
+            <button id="btnAddSceneAssign" class="btn btn-small">＋ 添加赋值</button>
+          </div>
+        </div>
+
+        <div class="options-head">
+          <h2>选项</h2>
+          <button id="btnAddOption" class="btn btn-small">＋ 添加选项</button>
+        </div>
+        <div id="optionList" class="option-list"></div>
+      </div>
+    </section>
+
+    <!-- 右栏：分析结果 -->
+    <aside class="pane pane-right">
+      <section class="card analysis-card">
+        <div class="card-head">
+          <h2>一致性分析</h2>
+          <button id="btnAnalyze" class="btn btn-small btn-primary">重新分析</button>
+        </div>
+
+        <div id="baselineBar" class="baseline-bar">
+          <button id="btnSaveBaseline" class="btn btn-small btn-primary">📌 保存分析基线</button>
+          <div id="baselineInfo" class="baseline-info"></div>
+        </div>
+
+        <div id="diffBar" class="diff-bar" hidden>
+          <div id="diffSummary" class="diff-summary"></div>
+          <div class="diff-actions">
+            <button id="btnRunCompare" class="btn btn-small">⇄ 运行对比</button>
+            <button id="btnClearBaseline" class="btn btn-small btn-danger">删除基线</button>
+          </div>
+          <div id="diffFilters" class="diff-filters"></div>
+          <div id="diffStale" class="diff-stale" hidden>⚠ 剧情已修改，当前对比结果可能过期，请重新「运行对比」</div>
+        </div>
+
+        <div id="analysisStats" class="stats"></div>
+        <ul id="issueList" class="issue-list"></ul>
+      </section>
+
+      <section id="pathQueryCard" class="card query-card" hidden>
+        <div class="card-head">
+          <h2>目标路径查询</h2>
+          <button id="btnRunPathQuery" class="btn btn-small btn-primary">查询路径</button>
+        </div>
+        <label class="field">
+          <span>目标场景</span>
+          <select id="pqTarget"></select>
+        </label>
+        <div class="field">
+          <span>到达时必须满足的变量（不添加则只要求到达目标场景）</span>
+          <div id="pqConstraints" class="assign-list"></div>
+          <button id="btnPqAddConstraint" class="btn btn-small">＋ 添加约束</button>
+        </div>
+        <div class="field">
+          <span>有序必经选项（按顺序依次经过；用 ↑↓ 调整次序）</span>
+          <div id="pqRequired" class="pq-opt-list"></div>
+          <button id="btnPqAddRequired" class="btn btn-small">＋ 添加必经选项</button>
+        </div>
+        <div class="field">
+          <span>禁用选项（查询时这些选项不可走，且不能与必经项重复）</span>
+          <div id="pqDisabled" class="pq-opt-list"></div>
+          <button id="btnPqAddDisabled" class="btn btn-small">＋ 添加禁用选项</button>
+        </div>
+        <div id="pqStale" class="diff-stale" hidden>⚠ 剧情或查询条件已修改，以下结果可能过期，请重新「查询路径」</div>
+        <div id="pqResult" class="pq-result"></div>
+      </section>
+
+      <section id="probCard" class="card prob-card" hidden>
+        <div class="card-head">
+          <h2>结局概率推演</h2>
+          <button id="btnRunProb" class="btn btn-small btn-primary">推演结局概率</button>
+        </div>
+        <div class="prob-hint">按选项权重（缺省为 1）在「场景 + 变量状态」图上精确求解：每个状态仅对条件成立且目标可进入的选项按权重归一化，含环图直接解方程，不做步数截断。</div>
+        <div id="probStale" class="diff-stale" hidden>⚠ 剧情已修改，以下结果可能过期，请重新「推演结局概率」</div>
+        <div id="probResult" class="prob-result"></div>
+      </section>
+
+      <section id="detailPanel" class="card detail-card" hidden>
+        <div class="card-head">
+          <h2 id="detailTitle">问题详情</h2>
+          <button id="btnCloseDetail" class="btn btn-small">✕</button>
+        </div>
+        <div id="detailStatus"></div>
+        <p id="detailMessage" class="detail-message"></p>
+        <div class="detail-section">
+          <h3>最接近的可达路径</h3>
+          <div id="detailPathTabs" class="path-tabs" hidden></div>
+          <div id="detailPath" class="path-view"></div>
+        </div>
+        <div id="detailUnmetWrap" class="detail-section" hidden>
+          <h3>未满足的条件</h3>
+          <div id="detailUnmet" class="unmet-view"></div>
+          <div id="detailFix" class="fix-hint"></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
