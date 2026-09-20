@@ -416,6 +416,35 @@ code {
 .prob-bar-fill.fill-warn { background: var(--warning); }
 .prob-bar-fill.fill-err { background: var(--danger); }
 
+/* ---------- 选项覆盖路线 ---------- */
+.cov-card { max-height: 46%; display: flex; flex-direction: column; }
+.cov-card .cov-result { overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.cov-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
+.cov-section-label { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+.cov-route { border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.cov-route > summary {
+  cursor: pointer; padding: 7px 10px; font-size: 12.5px; font-weight: 600;
+  list-style: none; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.cov-route > summary::-webkit-details-marker { display: none; }
+.cov-route > summary::before { content: '▸'; color: var(--muted); }
+.cov-route[open] > summary::before { content: '▾'; }
+.cov-route-body {
+  padding: 0 10px 10px; display: flex; flex-direction: column; gap: 7px;
+}
+.cov-uids { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cov-uids-label { font-size: 11px; color: var(--muted); }
+.cov-uid { background: var(--info-bg); color: var(--primary); }
+.cov-uid.cov-new { background: var(--ok-bg); color: var(--ok); }
+.cov-route .path-edge code { margin-left: 4px; }
+.cov-excluded {
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
+  font-size: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  background: #fff;
+}
+.cov-excluded .cov-ex-loc { color: var(--text); }
+.cov-excluded .cov-uid { background: #eef1f6; color: var(--muted); }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);

@@ -1,6 +1,6 @@
 # 分支剧情一致性审校台（Branching Story Auditor）
 
-一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**：精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量。
+一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**：精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量；以及生成 **选项覆盖路线**：用确定性贪心集合覆盖压缩出一组可执行路线，让所有实际可走的选项至少被走一遍。
 
 ## 能发现什么问题
 
@@ -185,6 +185,20 @@ npm start
 
 响应要点：`endings`（`sceneId` / `title` / `kind`：`ending` 或 `deadend` / `probability` / 吸收态数 `states`，按概率降序）、`totalEndingProbability`、`loopProbability`、`loops`（每个陷阱循环的 `probability`、涉及的 `scenes`、包含的具体状态数 `states`）、`counts`（具体状态数、转移数等）、`solver`（`exact` / `iterative` / `trivial`）、`conditionErrors`（语法错误按恒真处理的计数）。任意一次完整推演都有 `totalEndingProbability + loopProbability = 1`。
 
+## 选项覆盖路线
+
+编辑页右侧的「选项覆盖路线」面板回答：**“至少要跑哪些路线，才能让每条实际可走的选项都至少被走一遍？”**
+
+1. 点击「生成覆盖路线」，后端对 **编辑中的草稿**（不落盘）展开「场景 + 变量状态」图（与分析器相同的 BFS 去重与约 100 万状态上限，循环图按具体状态去重，必然终止）；
+2. 选项在某个具体状态下 **可走** = 条件成立 且 目标场景存在 且 应用赋值后目标前置条件成立。首次观测到某选项可走时的前驱状态即它的 **见证**：从起点到见证状态的最短选项链 + 该选项本身，构成一条 **可复现路线**——每条可走选项都先各自保留一条；
+3. 再用 **确定性的贪心集合覆盖** 压缩路线集：每轮选出「新覆盖未覆盖选项最多」的见证路线，平分时取见证发现顺序最早者（无随机性，同一草稿多次生成结果完全一致），直到全部可走选项被覆盖；
+4. 每条路线列出 **选项 UID、经过的场景与每步状态**（场景节点带到达时的完整变量取值，选项边带选择后的状态），并标注该路线 **新覆盖** 与 **累计覆盖** 的选项 UID；
+5. **覆盖分母只含实际可走的选项**：场景不可达、条件恒假、入口前置恒受阻、悬空跳转的选项一律不计入分母，单独列出并标注原因（`unreachableScene` / `neverTrue` / `blockedEntry` / `orphan`）；
+6. 状态数超上限被截断时结果标记为 **不完整**（`complete: false`）：已发现的可走选项仍被完整覆盖，但未探索区域可能还有可走选项，且「不可走」判定降为暂定（`excludedOptions` 中 `definitive: false`）；
+7. 生成针对的是编辑中的草稿；剧情被继续修改后，旧结果标记为 **可能过期**，重新「生成覆盖路线」即可。
+
+响应要点：`coverage`（`coverable` 分母 / `covered` 已覆盖 / `rate` 覆盖率）、`counts`（选项总数、路线数、具体状态数等）、`routes`（每条含 `depth`、`covers` / `newlyCovered` 选项 UID 数组、`path` 每步场景与状态）、`excludedOptions`（未计入分母的选项及原因）、`complete` / `truncated`、`conditionErrors`。完整（未截断）时必有 `covered = coverable`、`rate = 1`。
+
 ## HTTP API
 
 | 方法 | 路径 | 说明 |
@@ -200,6 +214,8 @@ npm start
 | `POST` | `/api/stories/:id/pathquery` | 对已保存剧情做目标路径查询，请求体即 `query` |
 | `POST` | `/api/probability` | 结局概率推演：对请求体中的草稿剧情直接推演（不落盘），请求体即剧情或 `{ story }`；非法权重返回 400 |
 | `GET` | `/api/stories/:id/probability` | 对已保存剧情做结局概率推演 |
+| `POST` | `/api/coverage` | 选项覆盖路线：对请求体中的草稿剧情直接生成（不落盘），请求体即剧情或 `{ story }` |
+| `GET` | `/api/stories/:id/coverage` | 对已保存剧情生成选项覆盖路线 |
 | `POST` | `/api/stories/:id/baseline` | 把请求体中的剧情分析结果保存为基线（同时落盘剧情），返回 `{ story, baseline, analysis }` |
 | `POST` | `/api/stories/:id/baseline/compare` | 基线对比；请求体可省略（对比已保存剧情）或传入编辑中的草稿，返回 `{ summary, items }` |
 | `DELETE` | `/api/stories/:id/baseline` | 删除基线（剧情内容不变） |
@@ -224,12 +240,13 @@ npm start
 
 ```
 .
-├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演接口）
+├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演、选项覆盖路线接口）
 ├── src/
 │   ├── expression.js      # 布尔表达式递归下降解析器 / 求值 / 失败解释
 │   ├── analyzer.js        # 「场景+状态」BFS 传播去重分析引擎（附带问题指纹）
 │   ├── pathquery.js       # 目标路径查询：必经序号+场景+状态 BFS 求最短链 / 差异最少状态
 │   ├── probability.js     # 结局概率推演：状态图展开、SCC 分解、吸收概率精确求解
+│   ├── coverage.js        # 选项覆盖路线：可走选项见证路径 + 确定性贪心集合覆盖压缩
 │   ├── weight.js          # 选项正整数权重的统一校验（保存 / 导入 / 推演共用）
 │   ├── fingerprint.js     # 不依赖数组顺序的问题稳定指纹
 │   ├── baseline.js        # 基线快照构建与新增/已修复/仍存在/详情变化对比
@@ -246,6 +263,7 @@ npm start
 │   ├── baseline.js        # 指纹 / 基线对比 / 持久化自检（node test/baseline.js）
 │   ├── pathquery.js       # 目标路径查询与 API 自检（node test/pathquery.js）
 │   ├── probability.js     # 结局概率推演核心算法与 API 自检（node test/probability.js）
+│   ├── coverage.js        # 选项覆盖路线与 API 自检（node test/coverage.js）
 │   └── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
 ├── Dockerfile
 └── docker-compose.yml
@@ -254,7 +272,7 @@ npm start
 自检：
 
 ```bash
-npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js 与 healthcheck.js
+npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js、coverage.js 与 healthcheck.js
 ```
 
 ## 技术栈

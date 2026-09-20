@@ -20,6 +20,8 @@ const state = {
   _pqSig: null,           // 查询面板场景/变量签名（避免每次编辑都重建下拉框）
   probResult: null,       // 最近一次结局概率推演结果
   probStale: false,       // 推演之后剧情又被编辑过
+  covResult: null,        // 最近一次选项覆盖路线结果
+  covStale: false,        // 生成路线之后剧情又被编辑过
   dirty: false,
   saving: false,
 };
@@ -79,6 +81,8 @@ async function openStory(id) {
   state._pqSig = null;
   state.probResult = null;
   state.probStale = false;
+  state.covResult = null;
+  state.covStale = false;
   $('storySelect').value = id;
   renderAll();
   await runAnalysis(false);
@@ -142,6 +146,8 @@ async function deleteStory() {
   state._pqSig = null;
   state.probResult = null;
   state.probStale = false;
+  state.covResult = null;
+  state.covStale = false;
   const next = await loadList();
   if (next) await openStory(next);
   else { renderAll(); toast('已删除'); }
@@ -187,6 +193,7 @@ function renderAll() {
   renderAnalysis();
   renderPathQueryPanel();
   renderProbabilityPanel();
+  renderCoveragePanel();
   renderDetail(null);
 }
 
@@ -504,11 +511,13 @@ function markDirty(rerender) {
   if (state.diff) state.diffStale = true;
   markPathQueryStale();
   markProbabilityStale();
+  markCoverageStale();
   renderSaveStatus();
   if (rerender) rerender();
   else renderAnalysis();
   renderPathQueryPanel(); // 内部有签名缓存，场景/变量未变时仅刷新过期提示与结果
   renderProbabilityPanel(); // 仅刷新过期提示与已展示的结果，不重新推演
+  renderCoveragePanel(); // 仅刷新过期提示与已展示的路线，不重新生成
   clearTimeout(reanalyzeTimer);
   reanalyzeTimer = setTimeout(() => runAnalysis(true), 500);
 }
@@ -1137,6 +1146,186 @@ function renderProbabilityResult() {
   }
 }
 
+/* ============================================================
+ * 选项覆盖路线
+ * ============================================================ */
+function markCoverageStale() {
+  if (!state.covResult) return;
+  state.covStale = true;
+  const el = $('covStale');
+  if (el) el.hidden = false;
+}
+
+async function runCoverage() {
+  if (!state.story) return;
+  try {
+    // 对编辑中的草稿直接生成（不落盘）
+    state.covResult = await api('POST', '/api/coverage', state.story);
+    state.covStale = false;
+    renderCoveragePanel();
+  } catch (e) {
+    toast(`生成覆盖路线失败：${e.message}`);
+  }
+}
+
+function renderCoveragePanel() {
+  const card = $('covCard');
+  if (!state.story) { card.hidden = true; return; }
+  card.hidden = false;
+  $('covStale').hidden = !state.covStale;
+  renderCoverageResult();
+}
+
+const COV_REASON_BADGE = {
+  unreachableScene: '<span class="badge badge-muted">场景不可达</span>',
+  orphan: '<span class="badge badge-err">悬空跳转</span>',
+  neverTrue: '<span class="badge badge-warn">条件恒假</span>',
+  blockedEntry: '<span class="badge badge-err">入口受阻</span>',
+};
+
+/** 选项 UID chip 行（新覆盖 / 路线覆盖 / 未计入分母） */
+function covUidChips(label, uids, cls) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cov-uids';
+  const lab = document.createElement('span');
+  lab.className = 'cov-uids-label';
+  lab.textContent = label;
+  wrap.appendChild(lab);
+  for (const uid of uids) {
+    const chip = document.createElement('code');
+    chip.className = 'cov-uid' + (cls ? ` ${cls}` : '');
+    chip.textContent = uid;
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+/** 路线视图：场景节点带到达时状态，选项边带 UID 与选择后状态 */
+function buildCoveragePathView(path, knownVars) {
+  const wrap = document.createElement('div');
+  wrap.className = 'path-view';
+  (path || []).forEach((node, i) => {
+    if (node.kind === 'scene') {
+      const div = document.createElement('div');
+      div.className = 'path-node scene';
+      const badge = i === 0 ? '<span class="badge badge-ok">起点</span>' : '';
+      div.innerHTML = `<span class="pn-title"></span><span class="pn-id"></span>${badge}`;
+      div.querySelector('.pn-title').textContent = node.title || node.sceneId;
+      div.querySelector('.pn-id').textContent = node.sceneId;
+      div.insertAdjacentHTML('beforeend', stateChips(node.state, knownVars || []));
+      wrap.appendChild(div);
+    } else {
+      const div = document.createElement('div');
+      div.className = 'path-edge';
+      div.appendChild(document.createTextNode(
+        `选项 ${node.optionIndex + 1}「${node.optionText || ''}」 → ${node.target}`));
+      if (node.optionUid) {
+        const uid = document.createElement('code');
+        uid.className = 'cov-uid';
+        uid.textContent = node.optionUid;
+        div.appendChild(uid);
+      }
+      if (node.stateAfter) {
+        div.insertAdjacentHTML('beforeend', stateChips(node.stateAfter, knownVars || []));
+      }
+      wrap.appendChild(div);
+    }
+  });
+  return wrap;
+}
+
+function renderCoverageResult() {
+  const box = $('covResult');
+  box.innerHTML = '';
+  const r = state.covResult;
+  if (!r || !state.story) return;
+
+  const banner = document.createElement('div');
+  if (r.startBlocked) {
+    banner.className = 'pq-banner pq-err';
+    banner.textContent = '✗ 起点场景的前置条件在初始状态下不成立，剧情无法开始，没有任何可走的选项。';
+    box.appendChild(banner);
+    return;
+  }
+
+  // 截断 => 结果不完整（已发现的可走选项仍被完整覆盖，但判定不可靠）
+  banner.className = 'pq-banner ' + (r.complete ? 'pq-ok' : 'pq-warn');
+  banner.textContent = (r.complete ? '✓ ' : '⚠ ') + r.message;
+  box.appendChild(banner);
+
+  if (r.conditionErrors && r.conditionErrors.length) {
+    const note = document.createElement('div');
+    note.className = 'pq-note';
+    note.textContent = `剧情中存在 ${r.conditionErrors.length} 处条件语法错误，本次生成按恒真处理（详见一致性分析）。`;
+    box.appendChild(note);
+  }
+
+  // 覆盖率汇总
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  const pct = r.coverage.rate === null ? '—' : fmtPct(r.coverage.rate);
+  stats.innerHTML = `
+    <div class="stat ${r.complete ? 'stat-ok' : 'stat-warn'}"><span>覆盖率（可走选项）</span><b>${pct}</b></div>
+    <div class="stat"><span>覆盖 / 分母</span><b>${r.coverage.covered} / ${r.coverage.coverable}</b></div>
+    <div class="stat"><span>路线数</span><b>${r.counts.routes}</b></div>
+    <div class="stat"><span>不计入分母</span><b>${r.counts.excluded}</b></div>
+    <div class="stat"><span>枚举具体状态</span><b>${r.counts.states}</b></div>
+    <div class="stat"><span>布尔变量</span><b>${r.counts.variables}</b></div>
+  `;
+  box.appendChild(stats);
+
+  // 路线列表（每条路线列出选项 UID、场景与每步状态）
+  const routeLabel = document.createElement('div');
+  routeLabel.className = 'cov-section-label';
+  routeLabel.textContent = r.routes.length
+    ? `覆盖路线（${r.routes.length} 条，贪心集合覆盖压缩后）`
+    : '覆盖路线（0 条）';
+  box.appendChild(routeLabel);
+
+  if (!r.routes.length) {
+    const none = document.createElement('div');
+    none.className = 'pq-note';
+    none.textContent = '没有实际可走的选项，未生成路线。';
+    box.appendChild(none);
+  }
+
+  r.routes.forEach((route, i) => {
+    const det = document.createElement('details');
+    det.className = 'cov-route';
+    if (i === 0) det.open = true;
+    const sum = document.createElement('summary');
+    sum.innerHTML = `<span>路线 ${route.index} · ${route.depth} 步</span>`
+      + `<span class="badge badge-ok">新覆盖 ${route.newlyCovered.length}</span>`
+      + `<span class="badge badge-muted">共覆盖 ${route.covers.length}</span>`;
+    det.appendChild(sum);
+    const body = document.createElement('div');
+    body.className = 'cov-route-body';
+    body.appendChild(covUidChips('新覆盖选项：', route.newlyCovered, 'cov-new'));
+    body.appendChild(covUidChips('路线覆盖选项：', route.covers, ''));
+    body.appendChild(buildCoveragePathView(route.path, r.knownVars));
+    det.appendChild(body);
+    box.appendChild(det);
+  });
+
+  // 未计入分母的不可走选项
+  if (r.excludedOptions && r.excludedOptions.length) {
+    const label = document.createElement('div');
+    label.className = 'cov-section-label';
+    label.textContent = `未计入分母的不可走选项（${r.excludedOptions.length}）`;
+    box.appendChild(label);
+    for (const o of r.excludedOptions) {
+      const row = document.createElement('div');
+      row.className = 'cov-excluded';
+      row.innerHTML = `${COV_REASON_BADGE[o.reason] || ''}<span class="cov-ex-loc"></span><code class="cov-uid"></code>`
+        + (o.definitive ? '' : '<span class="badge badge-warn">截断前暂定</span>');
+      row.querySelector('.cov-ex-loc').textContent =
+        `${o.sceneId}#${o.optionIndex + 1}「${o.text || '（无文案）'}」→ ${o.target || '（不跳转）'}`;
+      row.querySelector('code.cov-uid').textContent = o.uid;
+      box.appendChild(row);
+    }
+  }
+}
+
 
 function fmtTime(iso) {
   if (!iso) return '';
@@ -1537,6 +1726,7 @@ function bindGlobalEvents() {
   });
   $('btnAnalyze').addEventListener('click', () => runAnalysis(state.dirty));
   $('btnRunProb').addEventListener('click', runProbability);
+  $('btnRunCoverage').addEventListener('click', runCoverage);
   $('btnCloseDetail').addEventListener('click', () => $('detailPanel').hidden = true);
   $('btnSaveBaseline').addEventListener('click', saveBaseline);
   $('btnRunCompare').addEventListener('click', runCompare);
